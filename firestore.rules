@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRoomCode(code) {
+      return code is string && code.size() >= 4 && code.size() <= 16 && code.matches('^[A-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidUser(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'recentRooms', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'recentRooms', 'updatedAt'])
+        && data.uid is string
+        && data.uid == uid
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 64
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512))
+        && data.recentRooms is list
+        && data.recentRooms.size() <= 10
+        && (data.recentRooms.size() == 0 || (data.recentRooms[0] is string && data.recentRooms[0].size() <= 16))
+        && data.updatedAt == request.time;
+    }
+
+    function isValidStructures(s) {
+      return s is map
+        && s.keys().hasAll(['refineryLevel', 'dockLevel', 'lighthouseLevel', 'autoCollectorLevel', 'platformLevel', 'bayShieldLevel'])
+        && s.keys().hasOnly(['refineryLevel', 'dockLevel', 'lighthouseLevel', 'autoCollectorLevel', 'platformLevel', 'bayShieldLevel'])
+        && s.refineryLevel is int && s.refineryLevel >= 0 && s.refineryLevel <= 5
+        && s.dockLevel is int && s.dockLevel >= 0 && s.dockLevel <= 4
+        && s.lighthouseLevel is int && s.lighthouseLevel >= 0 && s.lighthouseLevel <= 4
+        && s.autoCollectorLevel is int && s.autoCollectorLevel >= 0 && s.autoCollectorLevel <= 5
+        && s.platformLevel is int && s.platformLevel >= 0 && s.platformLevel <= 4
+        && s.bayShieldLevel is int && s.bayShieldLevel >= 0 && s.bayShieldLevel <= 4;
+    }
+
+    function isValidRafts(rafts) {
+      return rafts is list
+        && rafts.size() >= 0
+        && rafts.size() <= 3
+        && (
+          rafts.size() == 0 || (
+            rafts[0] is map
+            && rafts[0].keys().hasAll(['id', 'level', 'capacity', 'engineLevel', 'hullLevel', 'hp', 'maxHp'])
+            && rafts[0].id is string && rafts[0].id.size() <= 32
+            && rafts[0].level is int && rafts[0].level >= 1 && rafts[0].level <= 5
+            && rafts[0].capacity is int && rafts[0].capacity >= 4 && rafts[0].capacity <= 40
+          )
+        );
+    }
+
+    function isValidRoom(data, roomCode) {
+      return data.keys().hasAll([
+          'roomCode', 'name', 'hostUid', 'memberUids', 'bankCubes',
+          'islandLevel', 'structures', 'rafts', 'playerProgress', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'roomCode', 'name', 'hostUid', 'memberUids', 'bankCubes',
+          'islandLevel', 'structures', 'rafts', 'playerProgress', 'createdAt', 'updatedAt'
+        ])
+        && isValidRoomCode(data.roomCode)
+        && data.roomCode == roomCode
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 48
+        && isValidId(data.hostUid)
+        && data.memberUids is list
+        && data.memberUids.size() >= 1
+        && data.memberUids.size() <= 12
+        && data.memberUids[0] is string && data.memberUids[0].size() <= 128
+        && data.bankCubes is number && data.bankCubes >= 0 && data.bankCubes <= 10000000
+        && data.islandLevel is int && data.islandLevel >= 1 && data.islandLevel <= 6
+        && isValidStructures(data.structures)
+        && isValidRafts(data.rafts)
+        && data.playerProgress is map
+        && data.playerProgress.size() <= 12
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if isVerified() && isValidId(uid) && request.auth.uid == uid && isValidUser(incoming(), uid);
+      allow update: if isVerified() && isValidId(uid) && request.auth.uid == uid && isValidUser(incoming(), uid);
+      allow delete: if false;
+    }
+
+    match /rooms/{roomCode} {
+      allow get: if isSignedIn() && isValidRoomCode(roomCode);
+      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+
+      allow create: if isVerified()
+        && isValidRoomCode(roomCode)
+        && isValidRoom(incoming(), roomCode)
+        && incoming().hostUid == request.auth.uid
+        && incoming().memberUids.size() == 1
+        && incoming().memberUids[0] == request.auth.uid
+        && incoming().islandLevel == 1
+        && incoming().createdAt == request.time;
+
+      allow update: if isVerified()
+        && isValidRoomCode(roomCode)
+        && isValidRoom(incoming(), roomCode)
+        && incoming().roomCode == existing().roomCode
+        && incoming().hostUid == existing().hostUid
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Action 1: Join room via invite code (adds self to memberUids and playerProgress)
+          (
+            !(request.auth.uid in existing().memberUids)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'playerProgress', 'updatedAt'])
+            && incoming().memberUids.size() == existing().memberUids.size() + 1
+            && incoming().memberUids.hasAll(existing().memberUids)
+            && (request.auth.uid in incoming().memberUids)
+            && (request.auth.uid in incoming().playerProgress)
+          )
+          ||
+          // Action 2: Co-op member syncs shared game state
+          (
+            (request.auth.uid in existing().memberUids)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'bankCubes', 'islandLevel', 'structures', 'rafts', 'playerProgress', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerified()
+        && isValidRoomCode(roomCode)
+        && existing().hostUid == request.auth.uid;
+    }
+  }
+}

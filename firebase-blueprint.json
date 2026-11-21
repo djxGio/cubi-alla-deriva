@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Player profile storing display identity and recent co-op island room codes.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Player display name",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Optional avatar URL",
+          "maxLength": 512
+        },
+        "recentRooms": {
+          "type": "array",
+          "description": "Recently visited island room codes (max 10)",
+          "items": {
+            "type": "string",
+            "maxLength": 16,
+            "pattern": "^[A-Z0-9_\\-]+$"
+          }
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": ["uid", "displayName", "recentRooms", "updatedAt"]
+    },
+    "IslandRoom": {
+      "title": "IslandRoom",
+      "description": "Shared co-op island room state persisted to Firestore.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Unique invite code for the shared island",
+          "minLength": 4,
+          "maxLength": 16,
+          "pattern": "^[A-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Island display name",
+          "minLength": 1,
+          "maxLength": 48
+        },
+        "hostUid": {
+          "type": "string",
+          "description": "Creator UID (immutable)",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "List of co-op member UIDs (max 12)",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "bankCubes": {
+          "type": "number",
+          "description": "Shared cube currency stored in the island bank"
+        },
+        "islandLevel": {
+          "type": "integer",
+          "description": "Island expansion level (1 to 6)"
+        },
+        "structures": {
+          "type": "object",
+          "description": "Unlocked and upgraded island structures"
+        },
+        "rafts": {
+          "type": "array",
+          "description": "Built rafts and their upgrade levels/cargo (0 to 3 rafts)"
+        },
+        "playerProgress": {
+          "type": "object",
+          "description": "Per-player XP, level, craftable tools, and gear levels keyed by UID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last-save timestamp"
+        }
+      },
+      "required": [
+        "roomCode",
+        "name",
+        "hostUid",
+        "memberUids",
+        "bankCubes",
+        "islandLevel",
+        "structures",
+        "rafts",
+        "playerProgress",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private player profile and recent co-op island rooms"
+    },
+    "/rooms/{roomCode}": {
+      "schema": { "$ref": "#/entities/IslandRoom" },
+      "description": "Shared co-op island state and progression"
+    }
+  }
+}
