@@ -22,6 +22,9 @@ import {
   CloudLightning,
   Wind,
   HelpCircle,
+  Store,
+  Utensils,
+  FlaskConical,
 } from 'lucide-react';
 import { TutorialPanel } from './TutorialPanel';
 import {
@@ -43,7 +46,10 @@ interface GameHudProps {
   hasCastTool?: boolean;
   onToggleMute: () => void;
   onOpenFabricator: () => void;
+  onOpenMarket: () => void;
   onSleep: () => void;
+  onUsePotion: () => void;
+  onUseFood: () => void;
   onInteract: () => void;
   onDeposit: () => void;
   onUseTool: () => void;
@@ -69,7 +75,10 @@ export const GameHud: React.FC<GameHudProps> = ({
   hasCastTool = false,
   onToggleMute,
   onOpenFabricator,
+  onOpenMarket,
   onSleep,
+  onUsePotion,
+  onUseFood,
   onInteract,
   onDeposit,
   onUseTool,
@@ -337,23 +346,94 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
         )}
 
-        {localPlayer && localPlayer.hp < localPlayer.maxHp - 1 && (
-          <div className="pointer-events-none w-72 rounded-xl border border-rose-500/35 bg-slate-900/92 px-3.5 py-1.5 shadow-lg">
-            <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
-              <span className="inline-flex items-center gap-1.5 text-rose-200">
-                <Heart className="h-3.5 w-3.5 text-rose-400" />
-                Salute Giocatore
-              </span>
-              <span className="text-rose-300">
-                {Math.round(localPlayer.hp)} / {localPlayer.maxHp}
-              </span>
+        {/* Always-visible Bottom Survival Bars: Vita & Fame */}
+        {localPlayer && (
+          <div className="pointer-events-auto w-full max-w-md rounded-xl border border-white/15 bg-slate-900/92 px-3.5 py-2 shadow-xl">
+            <div className="grid grid-cols-2 gap-3">
+              {/* Barra della Vita */}
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
+                  <span className="inline-flex items-center gap-1 text-rose-200">
+                    <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400/30" />
+                    Vita
+                  </span>
+                  <span className={localPlayer.hp <= 30 ? 'text-rose-400' : 'text-rose-200'}>
+                    {Math.round(localPlayer.hp)}/{localPlayer.maxHp}
+                  </span>
+                </div>
+                <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className={`h-full transition-all duration-150 ${
+                      localPlayer.hp <= 30 ? 'bg-rose-600' : 'bg-rose-500'
+                    }`}
+                    style={{
+                      width: `${Math.max(0, Math.min(100, (localPlayer.hp / localPlayer.maxHp) * 100))}%`,
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={onUsePotion}
+                  disabled={(localProgress?.potions || 0) <= 0 || localPlayer.hp >= localPlayer.maxHp}
+                  title="Usa Pozione Vitale [H]"
+                  className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-md bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-500/30 disabled:opacity-40 tabular-nums cursor-pointer"
+                >
+                  <FlaskConical className="h-3 w-3 text-rose-400" />
+                  [H] Pozione ({localProgress?.potions || 0})
+                </button>
+              </div>
+
+              {/* Barra della Fame */}
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
+                  <span className="inline-flex items-center gap-1 text-amber-200">
+                    <Utensils className="h-3.5 w-3.5 text-amber-400" />
+                    Fame
+                  </span>
+                  <span
+                    className={
+                      (localPlayer.hunger ?? 100) <= 20 ? 'text-rose-400' : 'text-amber-300'
+                    }
+                  >
+                    {Math.round(localPlayer.hunger ?? 100)}/{localPlayer.maxHunger ?? 100}
+                  </span>
+                </div>
+                <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className={`h-full transition-all duration-150 ${
+                      (localPlayer.hunger ?? 100) <= 20 ? 'bg-rose-500' : 'bg-amber-400'
+                    }`}
+                    style={{
+                      width: `${Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          ((localPlayer.hunger ?? 100) / (localPlayer.maxHunger ?? 100)) * 100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={onUseFood}
+                  disabled={
+                    (localProgress?.food || 0) <= 0 ||
+                    (localPlayer.hunger ?? 100) >= (localPlayer.maxHunger ?? 100) - 0.5
+                  }
+                  title="Mangia Razione di Cibo [J]"
+                  className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 hover:bg-amber-500/30 disabled:opacity-40 tabular-nums cursor-pointer"
+                >
+                  <Utensils className="h-3 w-3 text-amber-400" />
+                  [J] Cibo ({localProgress?.food || 0})
+                </button>
+              </div>
             </div>
-            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-              <div
-                className="h-full bg-rose-500 transition-all duration-150"
-                style={{ width: `${Math.max(0, Math.min(100, (localPlayer.hp / localPlayer.maxHp) * 100))}%` }}
-              />
-            </div>
+            {(localPlayer.hunger ?? 100) <= 0 && (
+              <div className="mt-1.5 text-center text-[10px] font-bold text-rose-300">
+                Fame a 0! Stai perdendo Vita: mangia cibo o visita il Mini Mercato sull’isola!
+              </div>
+            )}
           </div>
         )}
 
@@ -367,6 +447,16 @@ export const GameHud: React.FC<GameHudProps> = ({
 
         {/* Contextual Action Prompt */}
         <div className="pointer-events-auto flex flex-wrap justify-center gap-2">
+          {prompts.nearMarket && (
+            <button
+              type="button"
+              onClick={onOpenMarket}
+              className="inline-flex items-center gap-2 rounded-xl border border-rose-300/60 bg-rose-500 px-4 py-2 text-xs font-extrabold text-white shadow-lg hover:bg-rose-400 cursor-pointer"
+            >
+              <Store className="h-4 w-4" />
+              [E] Apri Mini Mercato (Pozioni &amp; Cibo)
+            </button>
+          )}
           {prompts.nearBed && (
             <button
               type="button"

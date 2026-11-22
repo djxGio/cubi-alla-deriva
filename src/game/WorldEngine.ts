@@ -4,6 +4,7 @@ import {
   CUBE_CONFIG,
   getBedPosition,
   getIslandRadius,
+  getMarketPosition,
   getSyncedWaveTime,
   getWaveHeight,
   type CubeTier,
@@ -71,6 +72,7 @@ export interface WorldHudPrompts {
   nearRaftId: string | null;
   nearFabricator: boolean;
   nearBed: boolean;
+  nearMarket: boolean;
   nearDepositZone: boolean;
   distanceFromIsland: number;
   inStorm: boolean;
@@ -967,13 +969,19 @@ export class WorldEngine {
       }
     }
 
-    // Island camp lantern & lighthouse glow boost at night
+    // Island camp & market lanterns + lighthouse glow boost at night
     if (this.islandRefs) {
       if (this.islandRefs.bedLanternLight) {
         this.islandRefs.bedLanternLight.intensity = 0.2 + nightFactor * 2.5;
       }
       if (this.islandRefs.bedLanternMat) {
         this.islandRefs.bedLanternMat.emissiveIntensity = 0.85 + nightFactor * 1.65;
+      }
+      if (this.islandRefs.marketLanternLight) {
+        this.islandRefs.marketLanternLight.intensity = 0.25 + nightFactor * 2.4;
+      }
+      if (this.islandRefs.marketLanternMat) {
+        this.islandRefs.marketLanternMat.emissiveIntensity = 0.85 + nightFactor * 1.65;
       }
       if (this.islandRefs.lighthouseBeamMat) {
         this.islandRefs.lighthouseBeamMat.opacity = 0.1 + nightFactor * 0.28 + w * 0.08;
@@ -1389,8 +1397,10 @@ export class WorldEngine {
     const islandR = getIslandRadius(state.islandLevel);
     const dist = Math.hypot(local.x, local.z);
     const bedPos = getBedPosition(state.islandLevel);
+    const marketPos = getMarketPosition(state.islandLevel);
     const nearBed = local.mode === 'walking' && Math.hypot(local.x - bedPos.x, local.z - bedPos.z) <= 3.6;
-    const nearFabricator = dist <= 3.2 && !nearBed;
+    const nearMarket = local.mode === 'walking' && Math.hypot(local.x - marketPos.x, local.z - marketPos.z) <= 4.0;
+    const nearFabricator = dist <= 3.2 && !nearBed && !nearMarket;
     const nearDepositZone =
       dist <= islandR + 10 + state.structures.dockLevel * 3.5 &&
       (local.carriedCubes.length > 0 ||
@@ -1417,13 +1427,14 @@ export class WorldEngine {
     }
 
     const roundedDist = Math.round(dist);
-    const hash = `${nearRaftId}|${nearFabricator}|${nearBed}|${nearDepositZone}|${roundedDist}|${inStorm}`;
+    const hash = `${nearRaftId}|${nearFabricator}|${nearBed}|${nearMarket}|${nearDepositZone}|${roundedDist}|${inStorm}`;
     if (hash !== this.lastPromptHash) {
       this.lastPromptHash = hash;
       this.onPromptChange({
         nearRaftId,
         nearFabricator,
         nearBed,
+        nearMarket,
         nearDepositZone,
         distanceFromIsland: roundedDist,
         inStorm,

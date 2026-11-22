@@ -68,6 +68,8 @@ export interface PlayerProgress {
   tools: PlayerToolsState;
   gear: PlayerGearState;
   repairKits: number;
+  potions: number;
+  food: number;
 }
 
 export interface LivePlayerState {
@@ -83,6 +85,8 @@ export interface LivePlayerState {
   carriedCubes: CubeTier[];
   hp: number;
   maxHp: number;
+  hunger: number;
+  maxHunger: number;
   activeTool: ToolId;
   toolCooldown: number;
   lastToolPulseAt: number;
@@ -235,6 +239,16 @@ export function getBedPosition(islandLevel: number): { x: number; z: number } {
   };
 }
 
+export function getMarketPosition(islandLevel: number): { x: number; z: number } {
+  const r = getIslandRadius(islandLevel);
+  const angle = 0.72; // Sunny coastal plaza between Fabricator and Dock
+  const dist = Math.max(4.8, r * 0.48);
+  return {
+    x: Number((Math.cos(angle) * dist).toFixed(2)),
+    z: Number((Math.sin(angle) * dist).toFixed(2)),
+  };
+}
+
 export function getRefineryMultiplier(refineryLevel: number): number {
   const table = [1, 1.25, 1.5, 1.85, 2.2, 2.6];
   return table[Math.max(0, Math.min(table.length - 1, refineryLevel))];
@@ -269,6 +283,34 @@ export function computeRecipeCost(recipe: RecipeDefinition, currentLevel: number
 }
 
 export const MAX_BREATH_SECONDS = 10;
+export const MAX_HUNGER = 100;
+
+export type MarketItemId = 'potion' | 'food';
+
+export interface MarketItemDefinition {
+  id: MarketItemId;
+  name: string;
+  description: string;
+  effectSummary: string;
+  cost: number;
+}
+
+export const MARKET_ITEMS: MarketItemDefinition[] = [
+  {
+    id: 'potion',
+    name: 'Pozione Vitale',
+    description: 'Elisir dell’isola che rigenera subito la tua salute riportando la Vita al massimo.',
+    effectSummary: 'Ripristina 100% Vita · Tasto rapido [H]',
+    cost: 5,
+  },
+  {
+    id: 'food',
+    name: 'Razione di Cibo',
+    description: 'Frutta tropicale e pesce arrostito per saziare la fame durante le spedizioni.',
+    effectSummary: '+50 Fame · Tasto rapido [J]',
+    cost: 3,
+  },
+];
 
 export function getWalkableSurfaceHeight(
   x: number,
@@ -634,6 +676,8 @@ export function createInitialPlayerProgress(
       stormSuitLv: 0,
     },
     repairKits: 1,
+    potions: 0,
+    food: 0,
   };
 }
 

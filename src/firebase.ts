@@ -162,6 +162,8 @@ function sanitizePlayerProgressForCloud(progressMap: RoomSnapshot['playerProgres
       tools: { ...p.tools },
       gear: { ...p.gear },
       repairKits: Math.max(0, Math.min(99, Math.floor(p.repairKits))),
+      potions: Math.max(0, Math.min(99, Math.floor(p.potions || 0))),
+      food: Math.max(0, Math.min(99, Math.floor(p.food || 0))),
     };
   }
   return result;
@@ -346,6 +348,16 @@ function hydrateSnapshotFromDoc(roomCode: string, data: Record<string, any>): Ro
           cargo: Array.isArray(r.cargo) ? r.cargo : [],
         }))
       : [],
-    playerProgress: data.playerProgress || {},
+    playerProgress: Object.fromEntries(
+      Object.entries(data.playerProgress || {}).map(([uid, prog]: [string, any]) => [
+        uid,
+        {
+          ...createInitialPlayerProgress(uid, prog?.displayName || 'Esploratore', 0),
+          ...(prog || {}),
+          potions: Number(prog?.potions || 0),
+          food: Number(prog?.food || 0),
+        },
+      ])
+    ),
   };
 }

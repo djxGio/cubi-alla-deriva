@@ -1,13 +1,16 @@
 import 'dotenv/config';
 import express from 'express';
 import http from 'http';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI } from '@google/genai';
 import {
   CUBE_CONFIG,
+  MARKET_ITEMS,
   MAX_BREATH_SECONDS,
+  MAX_HUNGER,
   RECIPES,
   computeRecipeCost,
   createDefaultRoomSnapshot,
@@ -16,6 +19,7 @@ import {
   getBackpackCapacity,
   getBedPosition,
   getIslandRadius,
+  getMarketPosition,
   getPlayerLevelFromXp,
   getRaftBuildSpec,
   getRaftCapacity,
@@ -27,6 +31,7 @@ import {
   type GameEventToast,
   type LivePlayerState,
   type LiveWorldState,
+  type MarketItemId,
   type RoomSnapshot,
   type SharkEntity,
   type StormCell,
@@ -73,6 +78,11 @@ class RoomSimulation {
   private wasNightPhase = false;
   private cubesDirty = true;
   private weatherTimer = 45;
+  private hungerWarned = new Set<string>();
+  private starvationWarned = new Set<string>();
+  private starvationImpactAcc = new Map<string, number>();
+  private hungerSaturation = new Map<string, number>();
+  private hungerExhaustion = new Map<string, number>();
 
   constructor(snapshot: RoomSnapshot) {
     this.state = {
@@ -229,8 +239,16 @@ class RoomSimulation {
     if (!this.state.playerProgress[uid]) {
       const idx = Object.keys(this.state.playerProgress).length;
       this.state.playerProgress[uid] = createInitialPlayerProgress(uid, displayName, idx);
-    } else if (displayName) {
-      this.state.playerProgress[uid].displayName = displayName;
+    } else {
+      if (displayName) {
+        this.state.playerProgress[uid].displayName = displayName;
+      }
+      if (typeof this.state.playerProgress[uid].potions !== 'number') {
+        this.state.playerProgress[uid].potions = 0;
+      }
+      if (typeof this.state.playerProgress[uid].food !== 'number') {
+        this.state.playerProgress[uid].food = 0;
+      }
     }
     const progress = this.state.playerProgress[uid];
 
@@ -251,12 +269,16 @@ class RoomSimulation {
         carriedCubes: [],
         hp: 100,
         maxHp: 100,
+        hunger: MAX_HUNGER,
+        maxHunger: MAX_HUNGER,
         activeTool: progress.activeTool,
         toolCooldown: 0,
         lastToolPulseAt: 0,
         breath: MAX_BREATH_SECONDS,
         maxBreath: MAX_BREATH_SECONDS,
       };
+      this.hungerSaturation.set(uid, 25);
+      this.hungerExhaustion.set(uid, 0);
     }
 
     this.clients.set(uid, {
@@ -279,6 +301,11 @@ class RoomSimulation {
       p.mode = 'walking';
     }
     delete this.state.players[uid];
+    this.hungerSaturation.delete(uid);
+    this.hungerExhaustion.delete(uid);
+    this.hungerWarned.delete(uid);
+    this.starvationWarned.delete(uid);
+    this.starvationImpactAcc.delete(uid);
   }
 
   public getSnapshot(): RoomSnapshot {
@@ -542,6 +569,7 @@ class RoomSimulation {
     const landX = player.x + dirX * castDist;
     const landZ = player.z + dirZ * castDist;
     player.lastToolPulseAt = Date.now();
+    this.hungerExhaustion.set(uid, (this.hungerExhaustion.get(uid) ?? 0) + 0.35);
 
     // Stun sharks near landing or flight path if harpoon / solar lance
     let stunnedCount = 0;
@@ -683,7 +711,9 @@ class RoomSimulation {
     }
 
     for (const p of Object.values(this.state.players)) {
-      p.hp = p.maxHp;
+      if (p.hunger > 0) {
+        p.hp = Math.min(p.maxHp, p.hp + 25);
+      }
       p.breath = p.maxBreath;
     }
 
@@ -699,6 +729,180 @@ class RoomSimulation {
       color: '#fbbf24',
     });
     this.broadcast('room:sync', this.getSnapshot());
+  }
+
+  public handleMarketBuy(uid: string, itemId: MarketItemId, useNow = false) {
+    const player = this.state.players[uid];
+    const prog = this.state.playerProgress[uid];
+    const item = MARKET_ITEMS.find((m) => m.id === itemId);
+    if (!player || !prog || !item) return;
+
+    const marketPos = getMarketPosition(this.state.islandLevel);
+    if (player.mode !== 'walking' || Math.hypot(player.x - marketPos.x, player.z - marketPos.z) > 6.0) {
+      this.sendTo(uid, 'room:error', 'Avvicinati al Mini Mercato sull’isola per acquistare.');
+      return;
+    }
+
+    if (player.carriedCubes.length > 0) {
+      const tiers = [...player.carriedCubes];
+      player.carriedCubes = [];
+      this.depositCubes(uid, tiers, 'zaino');
+    }
+
+    if (this.state.bankCubes < item.cost) {
+      this.sendTo(uid, 'room:error', `Servono ${item.cost} cubi nella cassa per comprare ${item.name}.`);
+      return;
+    }
+
+    this.state.bankCubes -= item.cost;
+
+    if (itemId === 'potion') {
+      if (useNow && player.hp < player.maxHp) {
+        player.hp = player.maxHp;
+        this.emitToast({
+          type: 'craft',
+          message: `${prog.displayName} ha acquistato e bevuto una Pozione Vitale: Vita al massimo!`,
+          color: '#f43f5e',
+        });
+      } else {
+        prog.potions = Math.min(99, (prog.potions || 0) + 1);
+        this.emitToast({
+          type: 'craft',
+          message: `${prog.displayName} ha comprato una Pozione Vitale (-${item.cost} ■). Premi [H] per berla!`,
+          color: '#f43f5e',
+        });
+      }
+    } else if (itemId === 'food') {
+      if (useNow && player.hunger < player.maxHunger - 1) {
+        player.hunger = Math.min(player.maxHunger, player.hunger + 50);
+        this.hungerSaturation.set(uid, Math.min(35, (this.hungerSaturation.get(uid) ?? 0) + 25));
+        this.hungerExhaustion.set(uid, 0);
+        if (player.hunger > 25) this.hungerWarned.delete(uid);
+        if (player.hunger > 0) this.starvationWarned.delete(uid);
+        this.emitToast({
+          type: 'craft',
+          message: `${prog.displayName} ha comprato e mangiato Cibo dell'isola (+50 Fame)!`,
+          color: '#fbbf24',
+        });
+      } else {
+        prog.food = Math.min(99, (prog.food || 0) + 1);
+        this.emitToast({
+          type: 'craft',
+          message: `${prog.displayName} ha comprato Cibo (-${item.cost} ■). Premi [J] per mangiare!`,
+          color: '#fbbf24',
+        });
+      }
+    }
+
+    this.broadcast('room:sync', this.getSnapshot());
+    this.broadcast('room:persist', this.getSnapshot());
+  }
+
+  public handleUsePotion(uid: string) {
+    const player = this.state.players[uid];
+    const prog = this.state.playerProgress[uid];
+    if (!player || !prog) return;
+    if ((prog.potions || 0) <= 0) {
+      this.sendTo(uid, 'room:error', 'Nessuna pozione nello zaino! Comprane una al Mini Mercato.');
+      return;
+    }
+    if (player.hp >= player.maxHp) {
+      this.sendTo(uid, 'room:error', 'Hai già la Vita al massimo!');
+      return;
+    }
+    prog.potions -= 1;
+    player.hp = player.maxHp;
+    this.emitToast({
+      type: 'craft',
+      message: `${prog.displayName} ha usato una Pozione Vitale: Vita 100/100!`,
+      color: '#f43f5e',
+    });
+    this.broadcast('room:sync', this.getSnapshot());
+    this.broadcast('room:persist', this.getSnapshot());
+  }
+
+  public handleUseFood(uid: string) {
+    const player = this.state.players[uid];
+    const prog = this.state.playerProgress[uid];
+    if (!player || !prog) return;
+    if ((prog.food || 0) <= 0) {
+      this.sendTo(uid, 'room:error', 'Nessun cibo nello zaino! Comprane al Mini Mercato.');
+      return;
+    }
+    if (player.hunger >= player.maxHunger - 0.5) {
+      this.sendTo(uid, 'room:error', 'Sei già sazio!');
+      return;
+    }
+    prog.food -= 1;
+    player.hunger = Math.min(player.maxHunger, player.hunger + 50);
+    this.hungerSaturation.set(uid, Math.min(35, (this.hungerSaturation.get(uid) ?? 0) + 25));
+    this.hungerExhaustion.set(uid, 0);
+    if (player.hunger > 25) this.hungerWarned.delete(uid);
+    if (player.hunger > 0) this.starvationWarned.delete(uid);
+    this.emitToast({
+      type: 'craft',
+      message: `${prog.displayName} ha mangiato una Razione di Cibo (+50 Fame)!`,
+      color: '#fbbf24',
+    });
+    this.broadcast('room:sync', this.getSnapshot());
+    this.broadcast('room:persist', this.getSnapshot());
+  }
+
+  private handlePlayerDeath(uid: string, cause: string) {
+    const player = this.state.players[uid];
+    const prog = this.state.playerProgress[uid];
+    if (!player) return;
+
+    const activeCount = Math.max(1, Object.keys(this.state.players).length);
+    const lostBankCubes =
+      activeCount <= 1 ? this.state.bankCubes : Math.ceil(this.state.bankCubes / activeCount);
+    const lostCarried = player.carriedCubes.length;
+    let lostRaftCargo = 0;
+
+    player.carriedCubes = [];
+    if (player.pilotingRaftId) {
+      const raft = this.state.rafts.find((r) => r.id === player.pilotingRaftId);
+      if (raft) {
+        if (raft.pilotUid === uid) raft.pilotUid = null;
+        lostRaftCargo += raft.cargo.length;
+        raft.cargo = [];
+      }
+      player.pilotingRaftId = null;
+    }
+    if (activeCount <= 1) {
+      for (const r of this.state.rafts) {
+        lostRaftCargo += r.cargo.length;
+        r.cargo = [];
+      }
+    }
+
+    this.state.bankCubes = Math.max(0, this.state.bankCubes - lostBankCubes);
+    const totalLost = lostBankCubes + lostCarried + lostRaftCargo;
+
+    player.x = 0;
+    player.z = 2.6;
+    player.y =
+      getWalkableSurfaceHeight(0, 2.6, this.state.islandLevel, this.state.structures) ?? 1.83;
+    player.mode = 'walking';
+    player.hp = player.maxHp;
+    player.hunger = MAX_HUNGER;
+    player.breath = player.maxBreath;
+
+    this.hungerSaturation.set(uid, 20);
+    this.hungerExhaustion.set(uid, 0);
+    this.hungerWarned.delete(uid);
+    this.starvationWarned.delete(uid);
+    this.starvationImpactAcc.delete(uid);
+
+    this.broadcast('room:impact', { x: player.x, z: player.z, dmg: 100 });
+    this.sendTo(uid, 'room:death', { cause, lostCubes: totalLost });
+    this.emitToast({
+      type: 'warning',
+      message: `${prog?.displayName || player.displayName} è morto per ${cause}: ha perso tutti i suoi cubi!`,
+      color: '#ef4444',
+    });
+    this.broadcast('room:sync', this.getSnapshot());
+    this.broadcast('room:persist', this.getSnapshot());
   }
 
   public handleRepairRaft(uid: string) {
@@ -1038,7 +1242,6 @@ class RoomSimulation {
           player.y = getWaveHeight(raft.x, raft.z, waveTime, localWeatherHit, islandR) + 0.55;
           player.angle = raft.angle;
           player.breath = Math.min(player.maxBreath, player.breath + dt * 4.5);
-          player.hp = Math.min(player.maxHp, player.hp + dt * 8);
 
           // Auto-offload if Dock Lv >= 1 and raft enters dock reach
           if (this.state.structures.dockLevel >= 1 && dCenter <= dockReach && raft.cargo.length > 0) {
@@ -1095,7 +1298,6 @@ class RoomSimulation {
           player.mode = 'walking';
           player.y = nextSurface;
           player.breath = Math.min(player.maxBreath, player.breath + dt * 4.5);
-          player.hp = Math.min(player.maxHp, player.hp + dt * 8);
           if (player.carriedCubes.length > 0 && nextDist <= islandR * 0.85) {
             const tiers = [...player.carriedCubes];
             player.carriedCubes = [];
@@ -1109,8 +1311,12 @@ class RoomSimulation {
           player.breath = Math.max(0, player.breath - dt);
 
           if (player.breath <= 0) {
-            // Out of 10s oxygen -> inflict HP damage, drop half carried cubes, and force teleport back to island
-            player.hp = Math.max(15, Math.round(player.hp - 35));
+            // Out of 10s oxygen -> inflict HP damage, drop half carried cubes, and force teleport back to island (or die if HP hits 0)
+            player.hp = Math.max(0, Math.round(player.hp - 35));
+            if (player.hp <= 0) {
+              this.handlePlayerDeath(uid, 'mancanza di ossigeno');
+              continue;
+            }
             const dropped = Math.ceil(player.carriedCubes.length / 2);
             player.carriedCubes = player.carriedCubes.slice(0, player.carriedCubes.length - dropped);
             const shoreAngle = Math.atan2(player.z, player.x);
@@ -1128,12 +1334,70 @@ class RoomSimulation {
             this.broadcast('room:impact', { x: player.x, z: player.z, dmg: 35 });
             this.emitToast({
               type: 'warning',
-              message: `${player.displayName} ha esaurito l'Ossigeno (10s): -35 Salute e ritorno forzato all'isola${dropped > 0 ? ` (-${dropped} cubi)` : ''}!`,
+              message: `${player.displayName} ha esaurito l'Ossigeno (10s): -35 Vita e ritorno forzato all'isola${dropped > 0 ? ` (-${dropped} cubi)` : ''}!`,
               color: '#f43f5e',
             });
             this.broadcast('room:sync', this.getSnapshot());
           }
         }
+      }
+
+      // Minecraft-style hunger depletion: exhaustion builds only on exertion, drains saturation first, then drops hunger in 5-pt steps
+      let exertionRate = 0;
+      if (player.mode === 'swimming') {
+        exertionRate = len > 0.05 ? (input.sprint ? 1.25 : 0.75) : 0.25;
+      } else if (player.mode === 'walking' && len > 0.05) {
+        exertionRate = input.sprint ? 0.95 : 0.08;
+      }
+
+      if (exertionRate > 0) {
+        let exhaustion = (this.hungerExhaustion.get(uid) ?? 0) + dt * exertionRate;
+        let saturation = this.hungerSaturation.get(uid) ?? 0;
+        const EXHAUSTION_STEP = 4.0;
+        while (exhaustion >= EXHAUSTION_STEP) {
+          exhaustion -= EXHAUSTION_STEP;
+          if (saturation > 0) {
+            saturation = Math.max(0, saturation - 5);
+          } else {
+            player.hunger = Math.max(0, player.hunger - 5);
+          }
+        }
+        this.hungerExhaustion.set(uid, exhaustion);
+        this.hungerSaturation.set(uid, saturation);
+      }
+
+      if (player.hunger <= 25 && player.hunger > 0 && !this.hungerWarned.has(uid)) {
+        this.hungerWarned.add(uid);
+        this.sendTo(uid, 'room:toast', {
+          id: `${Date.now()}-hunger-${uid}`,
+          type: 'warning',
+          message: 'Hai fame! Vai al Mini Mercato sull’isola per comprare del cibo.',
+          color: '#fbbf24',
+        });
+      }
+
+      if (player.hunger <= 0) {
+        if (!this.starvationWarned.has(uid)) {
+          this.starvationWarned.add(uid);
+          this.sendTo(uid, 'room:toast', {
+            id: `${Date.now()}-starve-${uid}`,
+            type: 'warning',
+            message: 'Fame a 0! Stai perdendo Vita: mangia subito o muori perdendo tutti i cubi!',
+            color: '#ef4444',
+          });
+        }
+        player.hp = Math.max(0, player.hp - dt * 4.5);
+        const acc = (this.starvationImpactAcc.get(uid) || 0) + dt;
+        if (acc >= 3.5) {
+          this.starvationImpactAcc.set(uid, 0);
+          this.sendTo(uid, 'room:impact', { x: player.x, z: player.z, dmg: 15 });
+        } else {
+          this.starvationImpactAcc.set(uid, acc);
+        }
+      }
+
+      if (player.hp <= 0) {
+        this.handlePlayerDeath(uid, 'fame');
       }
     }
 
@@ -1331,19 +1595,23 @@ class RoomSimulation {
           } else {
             const swimmer = this.state.players[targetId];
             if (swimmer) {
-              const swimmerDmg = Math.round(20 + nightFactor * 12);
-              swimmer.hp = Math.max(10, swimmer.hp - swimmerDmg);
-              swimmer.carriedCubes = swimmer.carriedCubes.slice(0, Math.floor(swimmer.carriedCubes.length / 2));
-              const towAngle = Math.atan2(swimmer.z, swimmer.x);
-              swimmer.x = Math.cos(towAngle) * (islandR * 0.6);
-              swimmer.z = Math.sin(towAngle) * (islandR * 0.6);
-              swimmer.mode = 'walking';
-              this.broadcast('room:impact', { x: swimmer.x, z: swimmer.z, dmg: swimmerDmg });
-              this.emitToast({
-                type: 'warning',
-                message: `Uno squalo ha attaccato ${swimmer.displayName} (-${swimmerDmg} HP) riportandolo a riva!`,
-                color: '#ef4444',
-              });
+              const swimmerDmg = 20;
+              swimmer.hp = Math.max(0, swimmer.hp - swimmerDmg);
+              if (swimmer.hp <= 0) {
+                this.handlePlayerDeath(targetId, 'attacco di squalo');
+              } else {
+                swimmer.carriedCubes = swimmer.carriedCubes.slice(0, Math.floor(swimmer.carriedCubes.length / 2));
+                const towAngle = Math.atan2(swimmer.z, swimmer.x);
+                swimmer.x = Math.cos(towAngle) * (islandR * 0.6);
+                swimmer.z = Math.sin(towAngle) * (islandR * 0.6);
+                swimmer.mode = 'walking';
+                this.broadcast('room:impact', { x: swimmer.x, z: swimmer.z, dmg: swimmerDmg });
+                this.emitToast({
+                  type: 'warning',
+                  message: `Uno squalo ha attaccato ${swimmer.displayName} (-${swimmerDmg} Vita) riportandolo a riva!`,
+                  color: '#ef4444',
+                });
+              }
             }
           }
         }
@@ -1420,6 +1688,20 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, activeRooms: rooms.size });
+  });
+
+  app.get('/api/logo/download', (_req, res) => {
+    const candidates = [
+      path.resolve(__dirname, 'public', 'cubi-alla-deriva-logo.jpg'),
+      path.resolve(__dirname, 'dist', 'cubi-alla-deriva-logo.jpg'),
+      path.resolve(__dirname, 'src', 'assets', 'images', 'cubi_deriva_logo_1795286876893.jpg'),
+    ];
+    const logoPath = candidates.find((p) => fs.existsSync(p));
+    if (!logoPath) {
+      res.status(404).json({ error: 'Logo non trovato.' });
+      return;
+    }
+    res.download(logoPath, 'cubi-alla-deriva-logo.jpg');
   });
 
   const almanacCache = new Map<
@@ -1584,6 +1866,8 @@ async function startServer() {
           if (action === 'interact') joinedRoom.handleInteract(joinedUid);
           else if (action === 'deposit') joinedRoom.handleDepositAction(joinedUid);
           else if (action === 'sleep') joinedRoom.handleSleep(joinedUid);
+          else if (action === 'use_potion') joinedRoom.handleUsePotion(joinedUid);
+          else if (action === 'use_food') joinedRoom.handleUseFood(joinedUid);
           else if (action === 'use_tool') {
             joinedRoom.handleUseTool(
               joinedUid,
@@ -1591,6 +1875,11 @@ async function startServer() {
               typeof msg.payload?.targetZ === 'number' ? msg.payload.targetZ : undefined
             );
           } else if (action === 'repair_raft') joinedRoom.handleRepairRaft(joinedUid);
+        } else if (msg.type === 'market:buy') {
+          const itemId = msg.payload?.itemId;
+          if (itemId === 'potion' || itemId === 'food') {
+            joinedRoom.handleMarketBuy(joinedUid, itemId, Boolean(msg.payload?.useNow));
+          }
         } else if (msg.type === 'player:select_tool') {
           joinedRoom.handleSelectTool(joinedUid, msg.payload?.tool as ToolId);
         } else if (msg.type === 'craft:execute') {

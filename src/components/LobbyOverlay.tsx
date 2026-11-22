@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { User } from 'firebase/auth';
 import { Compass, LogIn, LogOut, Play, Plus, User as UserIcon, Users } from 'lucide-react';
 import type { RoomSnapshot } from '../shared/gameCatalog';
+import gameLogoImg from '../assets/images/cubi_deriva_logo_1795286876893.jpg';
 
 type MenuMode = 'single' | 'multi';
 
@@ -34,6 +35,7 @@ export const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
   const [soloIslandName, setSoloIslandName] = useState('La Mia Isola');
   const [coopIslandName, setCoopIslandName] = useState('Baia dei Cubi');
   const [joinCode, setJoinCode] = useState('');
+  const [logoFailed, setLogoFailed] = useState(false);
 
   const handleStartSingle = () => {
     const cleanName = soloIslandName.trim() || 'La Mia Isola';
@@ -79,6 +81,7 @@ export const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
       <div className="relative z-10 flex flex-col items-center px-5 pt-5 sm:px-8 sm:pt-7">
         {/* Top-right Cloud Account Control */}
         <div className="w-full flex justify-end">
+
           {!authReady ? (
             <div className="pointer-events-auto rounded-xl border border-white/15 bg-slate-900/88 px-3.5 py-2 text-xs text-slate-300">
               Connessione cloud...
@@ -123,14 +126,24 @@ export const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
           )}
         </div>
 
-        {/* Large Centered Game Title over the live spinning island */}
+        {/* Large Centered Game Title & Logo over the live spinning island */}
         <header className="mt-1 sm:mt-2 text-center max-w-4xl">
-          <div className="inline-flex items-center justify-center gap-3.5">
-            <svg width="52" height="52" viewBox="0 0 42 42" fill="none" aria-hidden="true" className="shrink-0 drop-shadow-lg">
-              <rect x="4" y="8" width="18" height="18" rx="4" fill="#22d3ee" />
-              <rect x="19" y="15" width="19" height="19" rx="4" fill="#f59e0b" fillOpacity="0.95" />
-              <path d="M5 35C11 32 17 37 23 34C29 31 33 36 38 34" stroke="#38bdf8" strokeWidth="2.5" strokeLinecap="round" />
-            </svg>
+          <div className="inline-flex flex-col sm:flex-row items-center justify-center gap-3.5 sm:gap-5">
+            {!logoFailed ? (
+              <img
+                src={gameLogoImg}
+                alt="Logo di Cubi alla Deriva"
+                referrerPolicy="no-referrer"
+                onError={() => setLogoFailed(true)}
+                className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl border border-amber-300/35 bg-slate-900 object-cover shadow-2xl shrink-0"
+              />
+            ) : (
+              <svg width="64" height="64" viewBox="0 0 42 42" fill="none" aria-hidden="true" className="shrink-0 drop-shadow-lg">
+                <rect x="4" y="8" width="18" height="18" rx="4" fill="#22d3ee" />
+                <rect x="19" y="15" width="19" height="19" rx="4" fill="#f59e0b" fillOpacity="0.95" />
+                <path d="M5 35C11 32 17 37 23 34C29 31 33 36 38 34" stroke="#38bdf8" strokeWidth="2.5" strokeLinecap="round" />
+              </svg>
+            )}
             <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-white text-balance drop-shadow-[0_6px_28px_rgba(2,6,23,0.85)]">
               Cubi alla Deriva
             </h1>

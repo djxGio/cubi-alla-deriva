@@ -3,6 +3,7 @@ import {
   CUBE_CONFIG,
   getBedPosition,
   getIslandRadius,
+  getMarketPosition,
   type CubeTier,
   type RaftState,
   type StructuresState,
@@ -53,6 +54,8 @@ export interface IslandVisualRefs {
   fabricatorRing: THREE.Mesh;
   bedLanternLight?: THREE.PointLight;
   bedLanternMat?: THREE.MeshStandardMaterial;
+  marketLanternLight?: THREE.PointLight;
+  marketLanternMat?: THREE.MeshStandardMaterial;
   refineryTurbine?: THREE.Group;
   lighthouseBeam?: THREE.Group;
   lighthouseBeamMat?: THREE.MeshBasicMaterial;
@@ -294,6 +297,120 @@ export function buildIslandAndStructures(
 
   group.add(bed);
 
+  // 2c. Island Mini Mercato (Bancarella per Pozioni Vitale e Cibo in cambio di Cubi)
+  const marketPos = getMarketPosition(islandLevel);
+  const market = new THREE.Group();
+  market.position.set(marketPos.x, 1.55, marketPos.z);
+  market.rotation.y = -0.65;
+
+  // Base platform flush with sand tier (y = 1.55)
+  const marketDeck = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 2.2), woodMat);
+  marketDeck.position.y = 0.07;
+  marketDeck.castShadow = true;
+  marketDeck.receiveShadow = true;
+  market.add(marketDeck);
+
+  // Counter body & top plank
+  const counterBody = new THREE.Mesh(new THREE.BoxGeometry(2.75, 0.88, 0.8), woodMat);
+  counterBody.position.set(0, 0.58, 0.42);
+  counterBody.castShadow = true;
+  counterBody.receiveShadow = true;
+  market.add(counterBody);
+
+  const counterTop = new THREE.Mesh(
+    new THREE.BoxGeometry(2.96, 0.12, 0.98),
+    new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.72, flatShading: true })
+  );
+  counterTop.position.set(0, 1.06, 0.42);
+  counterTop.castShadow = true;
+  market.add(counterTop);
+
+  // 4 Wooden Canopy Posts
+  for (const px of [-1.32, 1.32]) {
+    for (const pz of [-0.78, 0.78]) {
+      const mPost = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.35, 6), woodMat);
+      mPost.position.set(px, 1.3, pz);
+      mPost.castShadow = true;
+      market.add(mPost);
+    }
+  }
+
+  // Striped coral-red & cream-white pitched market awning
+  const awningRedMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.7, flatShading: true });
+  const awningCreamMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.75, flatShading: true });
+  const stripeCount = 5;
+  for (let s = 0; s < stripeCount; s++) {
+    const sx = ((s / (stripeCount - 1)) - 0.5) * 2.5;
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.62, 0.1, 2.25),
+      s % 2 === 0 ? awningRedMat : awningCreamMat
+    );
+    stripe.position.set(sx, 2.52, 0.02);
+    stripe.rotation.x = 0.2;
+    stripe.castShadow = true;
+    market.add(stripe);
+  }
+
+  // Signboard crest on roof edge
+  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.36, 0.12), brassMat);
+  signBoard.position.set(0, 2.72, 0.92);
+  signBoard.castShadow = true;
+  market.add(signBoard);
+
+  // Left Counter Display: 2 Glowing Ruby Health Potions
+  const potionGlassMat = new THREE.MeshStandardMaterial({
+    color: 0xf43f5e,
+    emissive: 0xe11d48,
+    emissiveIntensity: 0.75,
+    roughness: 0.18,
+    metalness: 0.15,
+  });
+  for (const fx of [-0.88, -0.46]) {
+    const flask = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 8), potionGlassMat);
+    flask.position.set(fx, 1.28, 0.45);
+    flask.castShadow = true;
+    market.add(flask);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.16, 6), steelMat);
+    neck.position.set(fx, 1.48, 0.45);
+    market.add(neck);
+  }
+
+  // Right Counter Display: Food Basket with golden bread/roasted fruit & crisp apples
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.22, 0.62), woodMat);
+  crate.position.set(0.7, 1.22, 0.42);
+  crate.castShadow = true;
+  market.add(crate);
+
+  const loafMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.78, flatShading: true });
+  const appleMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.45, flatShading: true });
+  for (let i = 0; i < 3; i++) {
+    const loaf = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.34), loafMat);
+    loaf.position.set(0.42 + i * 0.26, 1.36, 0.42);
+    loaf.rotation.y = (i - 1) * 0.25;
+    market.add(loaf);
+  }
+  for (const [ax, az] of [[0.55, 0.26], [0.86, 0.56]]) {
+    const apple = new THREE.Mesh(new THREE.DodecahedronGeometry(0.11, 0), appleMat);
+    apple.position.set(ax, 1.42, az);
+    market.add(apple);
+  }
+
+  // Hanging Market Lantern (boosts softly at night)
+  const marketLanternMat = new THREE.MeshStandardMaterial({
+    color: 0xfef08a,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.0,
+  });
+  const marketLantern = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), marketLanternMat);
+  marketLantern.position.set(-1.32, 2.08, 0.96);
+  market.add(marketLantern);
+
+  const marketLanternLight = new THREE.PointLight(0xfbbf24, 0.35, 20, 2);
+  marketLanternLight.position.set(-1.32, 2.05, 1.15);
+  market.add(marketLanternLight);
+
+  group.add(market);
+
   // 3. Dock Structure (if dockLevel > 0)
   if (structures.dockLevel > 0) {
     const dock = new THREE.Group();
@@ -512,6 +629,8 @@ export function buildIslandAndStructures(
     fabricatorRing,
     bedLanternLight,
     bedLanternMat,
+    marketLanternLight,
+    marketLanternMat,
     refineryTurbine,
     lighthouseBeam,
     lighthouseBeamMat,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
+import { Skull } from 'lucide-react';
 import {
   auth,
   createIslandRoom,
@@ -24,6 +25,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LobbyOverlay } from './components/LobbyOverlay';
 import { GameHud } from './components/GameHud';
 import { FabricatorModal } from './components/FabricatorModal';
+import { MarketModal } from './components/MarketModal';
 
 function GameApp() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
@@ -42,7 +44,9 @@ function GameApp() {
   const [localUid, setLocalUid] = useState('');
   const [worldState, setWorldState] = useState<LiveWorldState | null>(null);
   const [fabricatorOpen, setFabricatorOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
+  const [deathNotice, setDeathNotice] = useState<{ cause: string; lostCubes: number } | null>(null);
   const [muted, setMuted] = useState(false);
   const [hasCastTool, setHasCastTool] = useState(false);
   const [toasts, setToasts] = useState<GameEventToast[]>([]);
@@ -50,6 +54,7 @@ function GameApp() {
     nearRaftId: null,
     nearFabricator: false,
     nearBed: false,
+    nearMarket: false,
     nearDepositZone: false,
     distanceFromIsland: 0,
     inStorm: false,
@@ -57,6 +62,8 @@ function GameApp() {
 
   const fabricatorOpenRef = useRef(false);
   fabricatorOpenRef.current = fabricatorOpen;
+  const marketOpenRef = useRef(false);
+  marketOpenRef.current = marketOpen;
   const pauseOpenRef = useRef(false);
   pauseOpenRef.current = pauseOpen;
   const promptsRef = useRef(prompts);
@@ -85,7 +92,7 @@ function GameApp() {
         setPrompts(nextPrompts);
       },
       (targetX, targetZ) => {
-        if (fabricatorOpenRef.current || pauseOpenRef.current) return;
+        if (fabricatorOpenRef.current || marketOpenRef.current || pauseOpenRef.current) return;
         sendWs('player:action', { action: 'use_tool', targetX, targetZ });
       }
     );
@@ -130,7 +137,9 @@ function GameApp() {
     }
     setInGame(false);
     setFabricatorOpen(false);
+    setMarketOpen(false);
     setPauseOpen(false);
+    setDeathNotice(null);
     setHasCastTool(false);
     setWorldState(null);
   }, []);
@@ -231,6 +240,16 @@ function GameApp() {
               message: String(msg.payload),
               color: '#f43f5e',
             });
+          } else if (msg.type === 'room:death') {
+            soundEngine.playImpact();
+            engineRef.current?.triggerShake(1.0);
+            setMarketOpen(false);
+            setFabricatorOpen(false);
+            setDeathNotice({
+              cause: String(msg.payload?.cause || 'esaurimento'),
+              lostCubes: Number(msg.payload?.lostCubes || 0),
+            });
+            window.setTimeout(() => setDeathNotice(null), 5000);
           } else if (msg.type === 'room:persist') {
             if (userRef.current) {
               saveRoomSnapshotToCloud(msg.payload).catch((err) =>
@@ -245,7 +264,7 @@ function GameApp() {
 
       // Send local input vector at 20 Hz
       inputTimerRef.current = window.setInterval(() => {
-        if (!engineRef.current || fabricatorOpenRef.current) {
+        if (!engineRef.current || fabricatorOpenRef.current || marketOpenRef.current) {
           sendWs('player:input', { moveX: 0, moveZ: 0, sprint: false });
           return;
         }
@@ -271,11 +290,13 @@ function GameApp() {
       if (e.repeat) return;
 
       if (e.code === 'Escape') {
-        if (fabricatorOpenRef.current) setFabricatorOpen(false);
+        if (marketOpenRef.current) setMarketOpen(false);
+        else if (fabricatorOpenRef.current) setFabricatorOpen(false);
         else setPauseOpen((p) => !p);
         return;
       }
       if (e.code === 'KeyF') {
+        setMarketOpen(false);
         setFabricatorOpen((v) => !v);
         return;
       }
@@ -285,10 +306,12 @@ function GameApp() {
         setMuted(next);
         return;
       }
-      if (fabricatorOpenRef.current) return;
+      if (fabricatorOpenRef.current || marketOpenRef.current) return;
 
       if (e.code === 'KeyE') {
-        if (promptsRef.current.nearBed && !promptsRef.current.nearRaftId) {
+        if (promptsRef.current.nearMarket && !promptsRef.current.nearRaftId) {
+          setMarketOpen(true);
+        } else if (promptsRef.current.nearBed && !promptsRef.current.nearRaftId) {
           sendWs('player:action', { action: 'sleep' });
         } else if (promptsRef.current.nearFabricator && !promptsRef.current.nearRaftId) {
           setFabricatorOpen(true);
@@ -297,6 +320,10 @@ function GameApp() {
         }
       } else if (e.code === 'KeyG') {
         sendWs('player:action', { action: 'deposit' });
+      } else if (e.code === 'KeyH') {
+        sendWs('player:action', { action: 'use_potion' });
+      } else if (e.code === 'KeyJ') {
+        sendWs('player:action', { action: 'use_food' });
       } else if (e.code === 'Space') {
         e.preventDefault();
         const aim = engineRef.current?.getAimPoint();
@@ -403,8 +430,17 @@ function GameApp() {
               soundEngine.setMuted(next);
               setMuted(next);
             }}
-            onOpenFabricator={() => setFabricatorOpen(true)}
+            onOpenFabricator={() => {
+              setMarketOpen(false);
+              setFabricatorOpen(true);
+            }}
+            onOpenMarket={() => {
+              setFabricatorOpen(false);
+              setMarketOpen(true);
+            }}
             onSleep={() => sendWs('player:action', { action: 'sleep' })}
+            onUsePotion={() => sendWs('player:action', { action: 'use_potion' })}
+            onUseFood={() => sendWs('player:action', { action: 'use_food' })}
             onInteract={() => sendWs('player:action', { action: 'interact' })}
             onDeposit={() => sendWs('player:action', { action: 'deposit' })}
             onUseTool={() => {
@@ -425,6 +461,30 @@ function GameApp() {
             onCraft={(recipeId, raftId) => sendWs('craft:execute', { recipeId, raftId })}
           />
 
+          <MarketModal
+            open={marketOpen}
+            onClose={() => setMarketOpen(false)}
+            worldState={worldState}
+            localPlayer={worldState.players[localUid]}
+            localProgress={localProgress}
+            onBuy={(itemId, useNow) => sendWs('market:buy', { itemId, useNow })}
+            onUsePotion={() => sendWs('player:action', { action: 'use_potion' })}
+            onUseFood={() => sendWs('player:action', { action: 'use_food' })}
+          />
+
+          {deathNotice && (
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-auto rounded-2xl border border-rose-500/60 bg-rose-950/95 px-5 py-3.5 shadow-2xl text-center max-w-md">
+              <div className="flex items-center justify-center gap-2 font-display text-base font-extrabold text-rose-200">
+                <Skull className="h-5 w-5 text-rose-400" />
+                Sei Morto!
+              </div>
+              <p className="mt-1 text-xs text-rose-100">
+                Causa: <strong>{deathNotice.cause}</strong>. Hai perso tutti i tuoi cubi
+                {deathNotice.lostCubes > 0 ? ` (${deathNotice.lostCubes} ■)` : ''} e sei rinato sull’isola!
+              </p>
+            </div>
+          )}
+
           {pauseOpen && (
             <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/75 p-4">
               <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-slate-900 p-6 shadow-2xl text-center">
@@ -435,7 +495,8 @@ function GameApp() {
                 <div className="mt-4 rounded-xl bg-slate-950/70 p-3 text-left text-xs text-slate-300 space-y-1">
                   <div><strong>WASD / Frecce:</strong> Muovi personaggio o zattera</div>
                   <div><strong>Q / C:</strong> Ruota telecamera · <strong>Rotella:</strong> Zoom</div>
-                  <div><strong>E:</strong> Sali/Scendi zattera o Apri Fabbricatore</div>
+                  <div><strong>E:</strong> Zattera, Letto, Mini Mercato o Fabbricatore</div>
+                  <div><strong>H / J:</strong> Bevi Pozione Vitale / Mangia Cibo</div>
                   <div><strong>Click sull’acqua / Spazio:</strong> Lancia Retino, Arpione o Lancia</div>
                   <div><strong>F:</strong> Apri Fabbricatore · <strong>R:</strong> Ripara zattera</div>
                 </div>
