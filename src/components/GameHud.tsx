@@ -30,6 +30,7 @@ import { TutorialPanel } from './TutorialPanel';
 import {
   getBackpackCapacity,
   getPlayerLevelFromXp,
+  isNightTime,
   type GameEventToast,
   type LiveWorldState,
   type PlayerProgress,
@@ -124,7 +125,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         : 'Mare Aperto (Tempeste & Cubi Rari)';
 
   const dayState = worldState.dayState || { day: 1, timeOfDay: 0.14, cycleDurationSec: 90 };
-  const isNightPhase = dayState.timeOfDay >= 0.78 || dayState.timeOfDay < 0.05;
+  const isNightPhase = isNightTime(dayState.timeOfDay);
   const dayPhaseLabel =
     dayState.timeOfDay < 0.22
       ? 'Mattina'
@@ -461,12 +462,17 @@ export const GameHud: React.FC<GameHudProps> = ({
             <button
               type="button"
               onClick={onSleep}
-              className="inline-flex items-center gap-2 rounded-xl border border-orange-300/60 bg-orange-500 px-4 py-2 text-xs font-extrabold text-slate-950 shadow-lg hover:bg-orange-400 cursor-pointer"
+              disabled={!isNightPhase}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-extrabold shadow-lg ${
+                isNightPhase
+                  ? 'border-orange-300/60 bg-orange-500 text-slate-950 hover:bg-orange-400 cursor-pointer'
+                  : 'border-slate-600/60 bg-slate-800/95 text-slate-300 cursor-not-allowed'
+              }`}
             >
               <BedDouble className="h-4 w-4" />
               {isNightPhase
                 ? "[E] Dormi fino all'Alba (Nuovo Giorno & Rigenera Cubi)"
-                : '[E] Dormi nel Letto (Nuovo Giorno & Rigenera Cubi)'}
+                : `Letto · Puoi dormire solo di notte (${dayPhaseLabel})`}
             </button>
           )}
           {prompts.nearFabricator && (

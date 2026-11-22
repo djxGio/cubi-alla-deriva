@@ -18,6 +18,10 @@ export interface DayState {
   cycleDurationSec: number;
 }
 
+export function isNightTime(timeOfDay: number): boolean {
+  return timeOfDay >= 0.78 || timeOfDay < 0.05;
+}
+
 export interface StructuresState {
   refineryLevel: number;
   dockLevel: number;

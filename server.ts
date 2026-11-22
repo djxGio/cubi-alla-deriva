@@ -27,6 +27,7 @@ import {
   getSyncedWaveTime,
   getWalkableSurfaceHeight,
   getWaveHeight,
+  isNightTime,
   type CubeTier,
   type GameEventToast,
   type LivePlayerState,
@@ -710,6 +711,12 @@ class RoomSimulation {
       return;
     }
 
+    const tod = this.state.dayState.timeOfDay;
+    if (!isNightTime(tod)) {
+      this.sendTo(uid, 'room:error', 'Puoi dormire solo di notte! Aspetta che cali il buio.');
+      return;
+    }
+
     for (const p of Object.values(this.state.players)) {
       if (p.hunger > 0) {
         p.hp = Math.min(p.maxHp, p.hp + 25);
@@ -717,15 +724,17 @@ class RoomSimulation {
       p.breath = p.maxBreath;
     }
 
-    this.state.dayState.day += 1;
+    if (tod >= 0.78) {
+      this.state.dayState.day += 1;
+      this.regenerateDailyCubes(true);
+    }
     this.state.dayState.timeOfDay = 0.14;
     this.wasNightPhase = false;
     this.nightCubeSurgeAcc = 0;
-    this.regenerateDailyCubes(true);
 
     this.emitToast({
       type: 'levelup',
-      message: `${prog.displayName} ha dormito nel letto: inizia il Giorno ${this.state.dayState.day}! Cubi rigenerati attorno all'isola e al largo.`,
+      message: `${prog.displayName} ha dormito fino all'alba: inizia il Giorno ${this.state.dayState.day}! Cubi rigenerati attorno all'isola e al largo.`,
       color: '#fbbf24',
     });
     this.broadcast('room:sync', this.getSnapshot());
